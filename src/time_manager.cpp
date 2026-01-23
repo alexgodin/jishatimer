@@ -1,72 +1,54 @@
 #include <Arduino.h>
-#include <ezTime.h>
 #include <RTClib.h>
 #include <Wire.h>
-#include "accelerometer.h"
 
-// Create RTC and timezone objects
 RTC_PCF8523 rtc;
-Timezone myTZ;
-
-// Timer management
-static volatile int elapsedSeconds = 0;
-static unsigned long lastTimerUpdate = 0;
-
-void syncEzTimeFromRTC() {
-    // Read RTC and update ezTime
-    DateTime rtcNow = rtc.now();
-    setTime(rtcNow.unixtime());
-    Serial.println("ezTime synced from RTC");
-}
 
 void setupTime() {
-    // Initialize I2C and RTC
-    Wire.begin();
-
     if (!rtc.begin()) {
         Serial.println("Couldn't find RTC");
         return;
     }
 
-    // Check if RTC has been initialized
-    if (!rtc.initialized() || rtc.lostPower()) {
-        Serial.println("RTC is NOT initialized or lost power!");
-        // Set to compile time as fallback
+    // Set to compile time if not initialized
+    // if (!rtc.initialized()) {
         rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    }
+        Serial.println("RTC set to compile time");
+    // }
 
-    setInterval(0);  // Disable NTP sync - we're using RTC
-
-    // Configure timezone (change to your location)
-    myTZ.setLocation("America/New_York");
-
-    syncEzTimeFromRTC();
-
-
-    Serial.println("Time initialized from RTC");
-    Serial.print("Current time: ");
-    Serial.println(myTZ.dateTime());
+    DateTime now = rtc.now();
+    Serial.printf("Time: %02d:%02d:%02d\n", now.hour(), now.minute(), now.second());
 }
 
 void getCurrentTime(String &hour, String &minute) {
-    // Return hour and minute in military time (24-hour format)
-    hour = myTZ.dateTime("H");    // Hour in 24-hour format (00-23)
-    minute = myTZ.dateTime("i");  // Minute with leading zero (00-59)
+    DateTime now = rtc.now();
+    int h = now.hour() % 12;
+    hour = String(h == 0 ? 12 : h);
+
+    // Add leading zero for single-digit minutes
+    int m = now.minute();
+    if (m < 10) {
+        minute = "0" + String(m);
+    } else {
+        minute = String(m);
+    }
 }
 
+// Timer functions
+static unsigned long lastTimerUpdate = 0;
 
 void setupElapsedTimer() {
-    elapsedSeconds = 0;
     lastTimerUpdate = millis();
-    Serial.println("Elapsed timer initialized (millis-based)");
+    Serial.println("Elapsed timer initialized");
 }
 
 void resetElapsedTimer() {
-    elapsedSeconds = 0;
     lastTimerUpdate = millis();
     Serial.println("Timer reset");
 }
 
 int getElapsedSeconds() {
-    return elapsedSeconds;
+    unsigned long currentTime = millis();
+    unsigned long elapsedMillis = currentTime - lastTimerUpdate;
+    return elapsedMillis / 1000;
 }

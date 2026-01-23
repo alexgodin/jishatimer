@@ -6,10 +6,7 @@
 // Initialize time system from RTC
 void setupTime();
 
-// Sync ezTime from RTC (call on boot or periodically)
-void syncEzTimeFromRTC();
-
-// Get current hour and minute separately (military time)
+// Get current hour and minute separately (12-hour format)
 void getCurrentTime(String &hour, String &minute);
 
 // Setup elapsed time timer

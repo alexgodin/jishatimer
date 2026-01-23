@@ -1,0 +1,9 @@
+#Add bottom display
+#Consider using AM/PM
+#add progress line to clock
+#Flickering on count up
+#both displays are displaying
+#Ensure flips work well.
+it shows 2 not 02
+Add timezone offset using an arduino timezone library
+Add low battery warning
