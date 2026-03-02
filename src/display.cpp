@@ -63,7 +63,7 @@ void clearInactiveDisplay(uint8_t orientation) {
 
 void drawProgressBar(Adafruit_IS31FL3731& display, int elapsedSeconds) {
   int progressLevel = (elapsedSeconds % 60) * 8 / 59;
-  display.drawLine(0, 0, progressLevel, 0, 150);
+  display.drawLine(0, 0, progressLevel, 0, 200);
 }
 
 void initializeDisplay(Adafruit_IS31FL3731& display, uint8_t address, const char* name) {
@@ -77,7 +77,7 @@ void initializeDisplay(Adafruit_IS31FL3731& display, uint8_t address, const char
     Serial.println(" found!");
   }
   display.setRotation(1);
-  display.setTextColor(150);
+  display.setTextColor(200);
   display.setTextWrap(false);
 }
 
@@ -125,6 +125,49 @@ void displayTime(String hour, String minute, int elapsedSeconds, uint8_t orienta
   lastMinute = minute;
   lastElapsedSeconds = elapsedSeconds;
   lastOrientation = orientation;
+}
+
+void drawBatteryLow(Adafruit_IS31FL3731& display, uint8_t& frameCounter) {
+  beginDraw(display, frameCounter);
+
+  const uint8_t B = 200;  // brightness
+  // 9 pixels wide, centered on 9-wide display starting at x=0
+  // 15 rows tall
+
+  // Row 0: nub  ..XXXXX..
+  for (int x = 2; x <= 6; x++) display.drawPixel(x, 0, B);
+
+  // Row 1: top wall  XXXXXXXXX
+  for (int x = 0; x <= 8; x++) display.drawPixel(x, 1, B);
+
+  // Rows 2-9: empty interior  X.......X
+  for (int y = 2; y <= 9; y++) {
+    display.drawPixel(0, y, B);
+    display.drawPixel(8, y, B);
+  }
+
+  // Rows 10-13: charge fill
+  for (int y = 10; y <= 13; y++) {
+    display.drawPixel(0, y, B);  // left wall
+    display.drawPixel(8, y, B);  // right wall
+    for (int x = 2; x <= 6; x++) display.drawPixel(x, y, B);
+  }
+
+  // Row 14: bottom wall  XXXXXXXXX
+  for (int x = 0; x <= 8; x++) display.drawPixel(x, 14, B);
+
+  endDraw(display, frameCounter);
+}
+
+void displayBatteryLow(uint8_t orientation) {
+  uint8_t activeDisplays = getActiveDisplays(orientation);
+
+  if (activeDisplays == 1 || activeDisplays == 3) {
+    drawBatteryLow(ledmatrix_top, currentFrame_top);
+  }
+  if (activeDisplays == 2 || activeDisplays == 3) {
+    drawBatteryLow(ledmatrix_bottom, currentFrame_bottom);
+  }
 }
 
 void drawElapsedMinutes(Adafruit_IS31FL3731& display, uint8_t& frameCounter, int elapsedMinutes, int elapsedSeconds) {

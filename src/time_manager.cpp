@@ -1,32 +1,81 @@
 #include <Arduino.h>
 #include <RTClib.h>
 #include <Wire.h>
+#include <WiFi.h>
+#include <WiFiMulti.h>
+#include <esp_sntp.h>
 
+const char* POSIX_TZ = "EST5EDT,M3.2.0,M11.1.0";
 RTC_PCF8523 rtc;
+RTC_DATA_ATTR time_t lastNtpSync = 0;  // Persists across deep sleep
+const time_t SYNC_INTERVAL = 48 * 60 * 60;  // 48 hours
+
+bool syncTimeFromNtp() {
+    // Connect to WiFi (tries each known network, picks strongest)
+    WiFiMulti wifiMulti;
+    wifiMulti.addAP("stellas world", "lovedeeply");
+    WiFi.mode(WIFI_STA);
+    if (wifiMulti.run(5000) != WL_CONNECTED) {
+        WiFi.disconnect(true);
+        return false;
+    }
+
+    // Fetch UTC from NTP (offsets 0,0 = no timezone adjustment, we want raw UTC)
+    configTime(0, 0, "pool.ntp.org");
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo, 5000)) {  // 5s timeout
+        WiFi.disconnect(true);
+        return false;
+    }
+
+    // Write UTC to RTC
+    time_t utcNow = time(nullptr);
+    rtc.adjust(DateTime(utcNow));
+    lastNtpSync = utcNow;
+
+    WiFi.disconnect(true);
+
+    // Restore timezone (configTime overwrites the TZ env var)
+    setenv("TZ", POSIX_TZ, 1);
+    tzset();
+
+    return true;
+}
+
+bool isNtpSyncDue() {
+    if (lastNtpSync == 0) return true;  // First boot
+    time_t now = rtc.now().unixtime();
+    return (now - lastNtpSync) >= SYNC_INTERVAL;
+}
+
+static bool syncAttempted = false;
 
 void setupTime() {
     if (!rtc.begin()) {
-        Serial.println("Couldn't find RTC");
+        Serial.println("ERROR: RTC not found");
         return;
     }
 
-    // Set to compile time if not initialized
-    // if (!rtc.initialized()) {
+    // If RTC lost power, set to compile time as fallback
+    if (!rtc.initialized()) {
         rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-        Serial.println("RTC set to compile time");
-    // }
+    }
 
-    DateTime now = rtc.now();
-    Serial.printf("Time: %02d:%02d:%02d\n", now.hour(), now.minute(), now.second());
+    // POSIX timezone: EST5EDT with US DST rules
+    setenv("TZ", POSIX_TZ, 1);
+    tzset();
 }
 
+// Returns current time in 12-hour format
 void getCurrentTime(String &hour, String &minute) {
-    DateTime now = rtc.now();
-    int h = now.hour() % 12;
+    time_t utc = rtc.now().unixtime();
+    struct tm local;
+    localtime_r(&utc, &local);
+
+    int h = local.tm_hour % 12;
     hour = String(h == 0 ? 12 : h);
 
-    // Add leading zero for single-digit minutes
-    int m = now.minute();
+    int m = local.tm_min;
     if (m < 10) {
         minute = "0" + String(m);
     } else {
@@ -37,18 +86,32 @@ void getCurrentTime(String &hour, String &minute) {
 // Timer functions
 static unsigned long lastTimerUpdate = 0;
 
-void setupElapsedTimer() {
+void startElapsedTimer() {
     lastTimerUpdate = millis();
-    Serial.println("Elapsed timer initialized");
 }
 
 void resetElapsedTimer() {
     lastTimerUpdate = millis();
-    Serial.println("Timer reset");
+    syncAttempted = false;
 }
 
 int getElapsedSeconds() {
     unsigned long currentTime = millis();
     unsigned long elapsedMillis = currentTime - lastTimerUpdate;
     return elapsedMillis / 1000;
+}
+
+void debugCorruptTime() {
+    rtc.adjust(DateTime(2000, 1, 1, 0, 0, 0));
+    lastNtpSync = 0;
+    syncAttempted = false;
+    Serial.println("RTC set to 2000-01-01 00:00, sync counter reset");
+}
+
+void syncTimeIfDue() {
+    if (syncAttempted) return;
+    if (getElapsedSeconds() < 15) return;
+    if (!isNtpSyncDue()) return;
+    syncAttempted = true;
+    syncTimeFromNtp();
 }

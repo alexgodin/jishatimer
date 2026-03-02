@@ -18,6 +18,7 @@
 #include "accelerometer.h"
 #include "time_manager.h"
 #include "display.h"
+#include "battery.h"
 
 // ============================================================================
 // CONFIGURATION
@@ -26,14 +27,17 @@
 // GPIO pin connected to LIS3DH INT1 output
 #define LIS3DH_INT_PIN        D1
 
-// Minimum time between orientation changes (milliseconds)
-const unsigned long ORIENTATION_DEBOUNCE_MS = 200;
-
 // Time of inactivity before entering deep sleep (minutes)
 const int SLEEP_TIMEOUT_MINUTES = 15;
 
 // Flag set by ISR when orientation change interrupt fires
 volatile bool orientationChanged = false;
+
+// Low battery display state
+bool showBattery = false;
+
+// Cached orientation (updated only on change)
+uint8_t currentOrientation = 0;
 
 
 void IRAM_ATTR orientationISR() {
@@ -75,12 +79,12 @@ void setup() {
   setupTime();
 
   // Initialize accelerometer and configure interrupt
-  lis3dh_setupInterrupt(LIS3DH_INT_PIN, orientationISR);
+  currentOrientation = lis3dh_setupInterrupt(LIS3DH_INT_PIN, orientationISR);
 
   // Initialize display and activity timer
   connect_display();
-  setupElapsedTimer();
-  Serial.println("Activity timer started - will sleep after 20 seconds of inactivity\n");
+  startElapsedTimer();
+  Serial.println("Activity timer started\n");
 }
 
 // ============================================================================
@@ -90,17 +94,26 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // Get current orientation for display selection
-  uint8_t currentOrientation = lis3dh_getOrientation();
+  // Serial debug commands
+  if (Serial.available() && Serial.read() == 'T') {
+    debugCorruptTime();
+  }
 
   // Track and display elapsed time
   int elapsed = getElapsedSeconds();
-  if (elapsed < 60) {
-    String hour, minute;
-    getCurrentTime(hour, minute);
-    displayTime(hour, minute, elapsed, currentOrientation);
+  syncTimeIfDue();
+
+  if (showBattery && elapsed < 15) {
+    displayBatteryLow(currentOrientation);
   } else {
-    displayElapsedMinutes(elapsed, currentOrientation);
+    showBattery = false;
+    if (elapsed < 60) {
+      String hour, minute;
+      getCurrentTime(hour, minute);
+      displayTime(hour, minute, elapsed, currentOrientation);
+    } else {
+      displayElapsedMinutes(elapsed, currentOrientation);
+    }
   }
 
   // Process orientation changes
@@ -111,7 +124,11 @@ void loop() {
       Serial.printf("  From: %s\n", lis3dh_decodeOrientation(prev).c_str());
       Serial.printf("  To:   %s\n", lis3dh_decodeOrientation(curr).c_str());
       Serial.println("  Status: Valid - sleep timer reset\n");
+      currentOrientation = curr;
       resetElapsedTimer();
+      if (getBatteryPercent() < 30.0f) {
+        showBattery = true;
+      }
       clearInactiveDisplay(curr);  // Clear the inactive display
     }
   }
