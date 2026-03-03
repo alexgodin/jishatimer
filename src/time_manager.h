@@ -9,9 +9,6 @@ void setupTime();
 // Get current hour and minute separately (12-hour format)
 void getCurrentTime(String &hour, String &minute);
 
-// Deferred NTP sync — call from loop(), syncs after 15s if needed
-void syncTimeIfDue();
-
 // Setup elapsed time timer
 void startElapsedTimer();
 

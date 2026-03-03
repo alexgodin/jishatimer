@@ -14,6 +14,7 @@ bool syncTimeFromNtp() {
     // Connect to WiFi (tries each known network, picks strongest)
     WiFiMulti wifiMulti;
     wifiMulti.addAP("stellas world", "lovedeeply");
+    wifiMulti.addAP("108nyzccc", "Dharma13");
     WiFi.mode(WIFI_STA);
     if (wifiMulti.run(5000) != WL_CONNECTED) {
         WiFi.disconnect(true);
@@ -28,8 +29,22 @@ bool syncTimeFromNtp() {
         return false;
     }
 
-    // Write UTC to RTC
+    // Measure RTC drift before overwriting, and auto-calibrate
     time_t utcNow = time(nullptr);
+    if (lastNtpSync > 0) {
+        time_t rtcNow = rtc.now().unixtime();
+        long drift = (long)(rtcNow - utcNow);
+        long elapsed = (long)(utcNow - lastNtpSync);
+        if (elapsed > 3600) {  // Need enough time to measure meaningful drift
+            float driftPpm = (float)drift / (float)elapsed * 1000000.0f;
+            int8_t offset = constrain((int)(-driftPpm / 4.34f), -64, 63);
+            rtc.calibrate(PCF8523_OneMinute, offset);
+            Serial.printf("NTP calibration: drift=%lds over %lds (%.1f ppm), offset=%d\n",
+                          drift, elapsed, driftPpm, offset);
+        }
+    }
+
+    // Write UTC to RTC
     rtc.adjust(DateTime(utcNow));
     lastNtpSync = utcNow;
 
@@ -48,8 +63,6 @@ bool isNtpSyncDue() {
     return (now - lastNtpSync) >= SYNC_INTERVAL;
 }
 
-static bool syncAttempted = false;
-
 void setupTime() {
     if (!rtc.begin()) {
         Serial.println("ERROR: RTC not found");
@@ -64,6 +77,11 @@ void setupTime() {
     // POSIX timezone: EST5EDT with US DST rules
     setenv("TZ", POSIX_TZ, 1);
     tzset();
+
+    // Sync from NTP if due (blocks up to 5s if no WiFi, 10s if WiFi but NTP slow)
+    if (isNtpSyncDue()) {
+        syncTimeFromNtp();
+    }
 }
 
 // Returns current time in 12-hour format
@@ -92,7 +110,6 @@ void startElapsedTimer() {
 
 void resetElapsedTimer() {
     lastTimerUpdate = millis();
-    syncAttempted = false;
 }
 
 int getElapsedSeconds() {
@@ -104,14 +121,6 @@ int getElapsedSeconds() {
 void debugCorruptTime() {
     rtc.adjust(DateTime(2000, 1, 1, 0, 0, 0));
     lastNtpSync = 0;
-    syncAttempted = false;
     Serial.println("RTC set to 2000-01-01 00:00, sync counter reset");
 }
 
-void syncTimeIfDue() {
-    if (syncAttempted) return;
-    if (getElapsedSeconds() < 15) return;
-    if (!isNtpSyncDue()) return;
-    syncAttempted = true;
-    syncTimeFromNtp();
-}

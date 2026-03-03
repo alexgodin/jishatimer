@@ -101,7 +101,6 @@ void loop() {
 
   // Track and display elapsed time
   int elapsed = getElapsedSeconds();
-  syncTimeIfDue();
 
   if (showBattery && elapsed < 15) {
     displayBatteryLow(currentOrientation);
