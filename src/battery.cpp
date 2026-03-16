@@ -12,9 +12,7 @@ float getBatteryPercent() {
   // Typical Li-ion battery: 4.2V = 100%, 3.0V = 0%
   float batteryPercent = ((Vbattf - 3.0) / (4.2 - 3.0)) * 100.0;
 
-  // Constrain percentage between 0 and 100
-  if (batteryPercent > 100) batteryPercent = 100;
-  if (batteryPercent < 0) batteryPercent = 0;
+  batteryPercent = constrain(batteryPercent, 0.0f, 100.0f);
 
   return batteryPercent;
 }

@@ -18,9 +18,6 @@
 #define LIS3DH_REG_INT1_SRC   0x31
 #define LIS3DH_REG_INT1_THS   0x32
 #define LIS3DH_REG_INT1_DUR   0x33
-#define LIS3DH_REG_OUT_X_L    0x28
-#define LIS3DH_REG_OUT_Y_L    0x2A
-#define LIS3DH_REG_OUT_Z_L    0x2C
 
 // Initialize the LIS3DH for 6D orientation detection
 bool lis3dh_init();

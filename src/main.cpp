@@ -51,7 +51,7 @@ void enterDeepSleep() {
   detachInterrupt(digitalPinToInterrupt(LIS3DH_INT_PIN));
 
   // Read current orientation and mask it to prevent immediate re-wake
-  uint8_t currentOrientation = lis3dh_getOrientation();
+  currentOrientation = lis3dh_getOrientation();
   Serial.printf("Current: %s\n", lis3dh_decodeOrientation(currentOrientation).c_str());
 
   lis3dh_maskOrientation(currentOrientation);
@@ -75,32 +75,124 @@ void setup() {
   Wire.begin();
   delay(100);
 
-  // Initialize RTC and time management
+  // Initialize display first and show splash while WiFi connects
+  connect_display();
+  displaySplash();
+
+  // Initialize RTC and time management (may block for WiFi/NTP)
   setupTime();
 
   // Initialize accelerometer and configure interrupt
   currentOrientation = lis3dh_setupInterrupt(LIS3DH_INT_PIN, orientationISR);
-
-  // Initialize display and activity timer
-  connect_display();
-  startElapsedTimer();
+  resetElapsedTimer();
   Serial.println("Activity timer started\n");
+}
+
+// ============================================================================
+// DISPLAY STATE HELPERS
+// ============================================================================
+
+const char* getDisplayStateName(int elapsed) {
+  if (showBattery && elapsed < 15) return "BATTERY";
+  if (elapsed < 60) return "TIME";
+  if (elapsed < SLEEP_TIMEOUT_MINUTES * 60) return "ELAPSED_MINUTES";
+  return "SLEEPING";
 }
 
 // ============================================================================
 // MAIN LOOP
 // ============================================================================
 
+// Track previous state for transition logging
+static const char* prevStateName = nullptr;
+
 void loop() {
   unsigned long now = millis();
 
   // Serial debug commands
-  if (Serial.available() && Serial.read() == 'T') {
-    debugCorruptTime();
+  while (Serial.available()) {
+    char cmd = Serial.read();
+    if (cmd == 'T') { debugCorruptTime(); break; }
+    if (cmd == 'S') {
+      bool ok = syncTimeWithRetry();
+      Serial.printf("NTP sync %s\n", ok ? "succeeded" : "FAILED");
+      break;
+    }
+    if (cmd == 'E') {
+      int e = getElapsedSeconds();
+      Serial.printf("STATE: %s elapsed=%ds\n", getDisplayStateName(e), e);
+      break;
+    }
+    if (cmd == 'R') {
+      resetElapsedTimer();
+      int e = getElapsedSeconds();
+      Serial.printf("RESET: timer reset, state=%s elapsed=%ds\n", getDisplayStateName(e), e);
+      break;
+    }
+    if (cmd == 'F') {
+      // Read number from serial (e.g. "F65\n")
+      delay(50); // wait for digits to arrive
+      String numStr = "";
+      while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') break;
+        numStr += c;
+      }
+      int secs = numStr.toInt();
+      debugSetElapsed(secs);
+      int e = getElapsedSeconds();
+      Serial.printf("FASTFWD: elapsed=%ds state=%s\n", e, getDisplayStateName(e));
+      break;
+    }
+    if (cmd == 'B') {
+      float pct = getBatteryPercent();
+      Serial.printf("BATTERY: %.0f%%\n", pct);
+      break;
+    }
+    if (cmd == 'Q') {
+      String hour, minute;
+      getCurrentTime(hour, minute);
+      Serial.printf("TIME: %s:%s\n", hour.c_str(), minute.c_str());
+      break;
+    }
+    if (cmd == 'D') {
+      int sleepAt = SLEEP_TIMEOUT_MINUTES * 60;
+      Serial.printf("DRYSLEEP: would sleep at elapsed=%ds\n", sleepAt);
+      break;
+    }
+    if (cmd == 'W') {
+      debugWifiFail = true;
+      bool ok = syncTimeFromNtp();
+      Serial.printf("NTP sync %s\n", ok ? "succeeded" : "FAILED");
+      break;
+    }
+    if (cmd == 'N') {
+      debugNtpTimeout = true;
+      bool ok = syncTimeFromNtp();
+      Serial.printf("NTP sync %s\n", ok ? "succeeded" : "FAILED");
+      break;
+    }
+    if (cmd == 'L') {
+      // Backdate lastNtpSync so calibration path runs (elapsed > 3600s)
+      debugSetLastNtpSync(time(nullptr) - 7200);
+      bool ok = syncTimeWithRetry();
+      Serial.printf("NTP sync %s\n", ok ? "succeeded" : "FAILED");
+      break;
+    }
   }
 
   // Track and display elapsed time
   int elapsed = getElapsedSeconds();
+
+  // Log state transitions
+  const char* currentStateName = getDisplayStateName(elapsed);
+  if (prevStateName == nullptr) {
+    prevStateName = currentStateName;
+    Serial.printf("TRANSITION: BOOT -> %s at elapsed=%ds\n", currentStateName, elapsed);
+  } else if (prevStateName != currentStateName) {
+    Serial.printf("TRANSITION: %s -> %s at elapsed=%ds\n", prevStateName, currentStateName, elapsed);
+    prevStateName = currentStateName;
+  }
 
   if (showBattery && elapsed < 15) {
     displayBatteryLow(currentOrientation);

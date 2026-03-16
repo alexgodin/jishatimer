@@ -160,6 +160,11 @@ void drawBatteryLow(Adafruit_IS31FL3731& display, uint8_t& frameCounter) {
 }
 
 void displayBatteryLow(uint8_t orientation) {
+  static bool lastShown = false;
+  static uint8_t lastOrientation = 0xFF;
+
+  if (lastShown && lastOrientation == orientation) return;
+
   uint8_t activeDisplays = getActiveDisplays(orientation);
 
   if (activeDisplays == 1 || activeDisplays == 3) {
@@ -168,6 +173,24 @@ void displayBatteryLow(uint8_t orientation) {
   if (activeDisplays == 2 || activeDisplays == 3) {
     drawBatteryLow(ledmatrix_bottom, currentFrame_bottom);
   }
+
+  lastShown = true;
+  lastOrientation = orientation;
+}
+
+void drawSplash(Adafruit_IS31FL3731& display, uint8_t& frameCounter) {
+  beginDraw(display, frameCounter);
+  display.setFont(&Picopixel);
+  display.setCursor(1, 6);
+  display.print("NY");
+  display.setCursor(1, 13);
+  display.print("ZC");
+  endDraw(display, frameCounter);
+}
+
+void displaySplash() {
+  drawSplash(ledmatrix_top, currentFrame_top);
+  drawSplash(ledmatrix_bottom, currentFrame_bottom);
 }
 
 void drawElapsedMinutes(Adafruit_IS31FL3731& display, uint8_t& frameCounter, int elapsedMinutes, int elapsedSeconds) {
@@ -189,15 +212,18 @@ void drawElapsedMinutes(Adafruit_IS31FL3731& display, uint8_t& frameCounter, int
 }
 
 void displayElapsedMinutes(int elapsedSeconds, uint8_t orientation) {
-  static int lastElapsedSeconds = -1;
+  int elapsedMinutes = elapsedSeconds / 60;
+  int progressLevel = (elapsedSeconds % 60) * 8 / 59;
+
+  static int lastElapsedMinutes = -1;
+  static int lastProgressLevel = -1;
   static uint8_t lastOrientation = 0xFF;
 
-  // Redraw if elapsed time OR orientation changed
-  if (lastElapsedSeconds == elapsedSeconds && lastOrientation == orientation) {
+  if (lastElapsedMinutes == elapsedMinutes &&
+      lastProgressLevel == progressLevel &&
+      lastOrientation == orientation) {
     return;
   }
-
-  int elapsedMinutes = elapsedSeconds / 60;
   uint8_t activeDisplays = getActiveDisplays(orientation);
 
   if (activeDisplays == 1 || activeDisplays == 3) {
@@ -207,6 +233,7 @@ void displayElapsedMinutes(int elapsedSeconds, uint8_t orientation) {
     drawElapsedMinutes(ledmatrix_bottom, currentFrame_bottom, elapsedMinutes, elapsedSeconds);
   }
 
-  lastElapsedSeconds = elapsedSeconds;
+  lastElapsedMinutes = elapsedMinutes;
+  lastProgressLevel = progressLevel;
   lastOrientation = orientation;
 }

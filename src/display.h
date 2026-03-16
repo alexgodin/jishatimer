@@ -21,4 +21,7 @@ void clearInactiveDisplay(uint8_t orientation);
 // Display blinking low-battery icon
 void displayBatteryLow(uint8_t orientation);
 
+// Display "NY" / "ZC" splash screen on both displays
+void displaySplash();
+
 #endif
