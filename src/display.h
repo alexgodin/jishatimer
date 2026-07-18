@@ -3,25 +3,22 @@
 
 #include <Arduino.h>
 
-// Initialize the LED matrix displays (default address and 0x76)
+// Initialize the top IS31FL3731 LED matrix at 0x76
 void connect_display();
 
 // Display time on LED matrix
-void displayTime(String hour, String minute, int elapsedSeconds, uint8_t orientation);
+void displayTime(String hour, String minute, int elapsedSeconds);
 
 // Display minutes with a progress bar
-void displayElapsedMinutes(int elapsedSeconds, uint8_t orientation);
+void displayElapsedMinutes(int elapsedSeconds);
 
 //clear display
 void clearDisplay();
 
-// Clear inactive display based on orientation
-void clearInactiveDisplay(uint8_t orientation);
-
 // Display blinking low-battery icon
-void displayBatteryLow(uint8_t orientation);
+void displayBatteryLow();
 
-// Display "NY" / "ZC" splash screen on both displays
+// Display "NY" / "ZC" splash screen
 void displaySplash();
 
 #endif

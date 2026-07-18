@@ -101,8 +101,8 @@ void lis3dh_clearInterrupt() {
 uint8_t lis3dh_setupInterrupt(uint8_t interruptPin, void (*isr)(void)) {
   // Initialize accelerometer
   if (!lis3dh_init()) {
-    Serial.println("FATAL: LIS3DH init failed");
-    while (1) delay(1000);
+    Serial.println("WARNING: LIS3DH init failed - continuing without accelerometer");
+    return 0;
   }
 
   // Read and mask current orientation

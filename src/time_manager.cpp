@@ -10,6 +10,7 @@ const char* POSIX_TZ = "EST5EDT,M3.2.0,M11.1.0";
 // Forward declaration
 void getCurrentTime(String &hour, String &minute);
 RTC_PCF8523 rtc;
+static bool rtcAvailable = false;
 RTC_DATA_ATTR time_t lastNtpSync = 0;  // Persists across deep sleep
 const time_t SYNC_INTERVAL = 48 * 60 * 60;  // 48 hours
 
@@ -144,6 +145,7 @@ bool syncTimeWithRetry(int maxAttempts /* = 3 */) {
 }
 
 bool isNtpSyncDue() {
+    if (!rtcAvailable) return false;
     if (lastNtpSync == 0) return true;  // First boot
     time_t now = rtc.now().unixtime();
     return (now - lastNtpSync) >= SYNC_INTERVAL;
@@ -151,9 +153,10 @@ bool isNtpSyncDue() {
 
 void setupTime() {
     if (!rtc.begin()) {
-        Serial.println("ERROR: RTC not found");
+        Serial.println("ERROR: RTC not found - running without RTC");
         return;
     }
+    rtcAvailable = true;
     Serial.println("RTC found");
 
     // If RTC lost power, set to compile time as fallback
@@ -181,6 +184,11 @@ void setupTime() {
 
 // Returns current time in 12-hour format
 void getCurrentTime(String &hour, String &minute) {
+    if (!rtcAvailable) {
+        hour = "--";
+        minute = "--";
+        return;
+    }
     time_t utc = rtc.now().unixtime();
     struct tm local;
     localtime_r(&utc, &local);

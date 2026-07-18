@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Comprehensive time state test suite for the jishatimer device.
+Hardware-in-the-loop test suite for the jishatimer device.
 
-Tests display states, NTP error paths, RTC drift/calibration, and NTP sync.
+Drives the device over its USB serial command interface and checks
+display presence, timer state transitions, battery, sleep, RTC
+drift/calibration, NTP error paths, and NTP sync.
 Requires device connected via USB serial.
 
-Usage: python3 test_ntp_sync.py [port]
+Usage: python3 hardware_test_suite.py [port]
   port defaults to /dev/cu.usbmodem*
 """
 
@@ -179,6 +181,19 @@ def test_query_time_format(dev):
                 return True, f"Valid format: {dev_h}:{dev_m:02d}"
             return False, f"Invalid time: h={dev_h} m={dev_m}"
     return False, f"No TIME: line: {lines}"
+
+
+def test_display_present(dev):
+    """Probe SH1106 OLED on I2C. Catches 'screen shows nothing' from
+    wiring/address/power issues — device responds on serial but the
+    display never ACKs at 0x3C."""
+    lines = send_with_retry(dev, "X", marker="DISPLAY:")
+    for line in lines:
+        if line.startswith("DISPLAY: ok"):
+            return True, line
+        if line.startswith("DISPLAY:"):
+            return False, line
+    return False, f"No DISPLAY: line: {lines}"
 
 
 def test_query_battery(dev):
@@ -376,6 +391,7 @@ def main():
 
     tests = [
         # Group 1: State & Display Tests
+        ("Display Present (I2C probe)", test_display_present),
         ("Query State Command", test_query_state),
         ("Time Display State", test_time_display_state),
         ("Query Time Format", test_query_time_format),

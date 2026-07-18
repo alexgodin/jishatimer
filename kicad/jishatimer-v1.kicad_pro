@@ -512,7 +512,7 @@
       "gencad": "",
       "idf": "",
       "netlist": "",
-      "plot": "/Users/kanshin/Library/CloudStorage/Dropbox/jishatimerV3/",
+      "plot": "../../Dropbox/jisha timer reprint/",
       "pos_files": "",
       "specctra_dsn": "",
       "step": "",
@@ -659,7 +659,7 @@
         "uuid": "0821f1aa-185d-4fc5-8443-ddda65741fae"
       }
     ],
-    "used_designators": "",
+    "used_designators": "U1,D1",
     "variants": []
   },
   "sheets": [

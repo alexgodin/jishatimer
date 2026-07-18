@@ -1,239 +1,107 @@
 #include <Arduino.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_IS31FL3731.h>
-#include <Fonts/Picopixel.h>
+#include <U8g2lib.h>
 #include "display.h"
 
-Adafruit_IS31FL3731 ledmatrix_top = Adafruit_IS31FL3731();
-Adafruit_IS31FL3731 ledmatrix_bottom = Adafruit_IS31FL3731();
+static U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R1);
 
-// Frame tracking for double buffering (separate for each display)
-static uint8_t currentFrame_top = 0;
-static uint8_t currentFrame_bottom = 0;
+static constexpr int SCREEN_W = 64;
+static constexpr int SCREEN_H = 128;
+static constexpr int PROGRESS_H = 5;
 
-// Helper functions for flicker-free drawing
-void beginDraw(Adafruit_IS31FL3731& display, uint8_t& frameCounter) {
-  uint8_t drawFrame = (frameCounter + 1) % 2;
-  display.setFrame(drawFrame);
-  display.clear();
-}
-
-void endDraw(Adafruit_IS31FL3731& display, uint8_t& frameCounter) {
-  uint8_t drawFrame = (frameCounter + 1) % 2;
-  display.displayFrame(drawFrame);
-  frameCounter = drawFrame;
-}
-
-// Determine which display should be active based on Y-axis orientation
-// Returns: 1 = top only, 2 = bottom only, 3 = both
-uint8_t getActiveDisplays(uint8_t orientation) {
-  bool isYPlus = orientation & 0x08;   // Y+ (top up)
-  bool isYMinus = orientation & 0x04;  // Y- (bottom up)
-
-  if (isYPlus && !isYMinus) {
-    return 1;  // Top display only
-  } else if (isYMinus && !isYPlus) {
-    return 2;  // Bottom display only
-  } else {
-    // Both bits set OR neither bit set: use both displays (safe fallback)
-    return 3;
-  }
-}
+#define FONT_BIG    u8g2_font_logisoso28_tr
+#define FONT_MEDIUM u8g2_font_logisoso22_tr
 
 void clearDisplay() {
-  ledmatrix_top.clear();
-  ledmatrix_bottom.clear();
-}
-
-void clearInactiveDisplay(uint8_t orientation) {
-  uint8_t activeDisplays = getActiveDisplays(orientation);
-
-  // Clear the inactive display based on orientation
-  if (activeDisplays == 1) {
-    // Top only active, clear bottom
-    ledmatrix_bottom.clear();
-    ledmatrix_bottom.displayFrame(currentFrame_bottom);
-  } else if (activeDisplays == 2) {
-    // Bottom only active, clear top
-    ledmatrix_top.clear();
-    ledmatrix_top.displayFrame(currentFrame_top);
-  }
-  // If activeDisplays == 3 (both), don't clear anything
-}
-
-void drawProgressBar(Adafruit_IS31FL3731& display, int elapsedSeconds) {
-  int progressLevel = (elapsedSeconds % 60) * 8 / 59;
-  display.drawLine(0, 0, progressLevel, 0, 200);
-}
-
-void initializeDisplay(Adafruit_IS31FL3731& display, uint8_t address, const char* name) {
-  if (!display.begin(address)) {
-    Serial.print("IS31 ");
-    Serial.print(name);
-    Serial.println(" not found");
-  } else {
-    Serial.print("IS31 ");
-    Serial.print(name);
-    Serial.println(" found!");
-  }
-  display.setRotation(1);
-  display.setTextColor(200);
-  display.setTextWrap(false);
+  u8g2.clearBuffer();
+  u8g2.sendBuffer();
 }
 
 void connect_display() {
-  initializeDisplay(ledmatrix_top, 0x76, "Top");      // SWAPPED: was 0x74
-  initializeDisplay(ledmatrix_bottom, 0x74, "Bottom"); // SWAPPED: was 0x76
+  u8g2.setBusClock(400000);
+  u8g2.begin();
+  Serial.println("SH1106 initialized");
 }
 
-void drawTime(Adafruit_IS31FL3731& display, uint8_t& frameCounter, String hour, String minute, int elapsedSeconds) {
-  beginDraw(display, frameCounter);
-  display.setFont(&Picopixel);
-  display.setCursor(1, 6);
-  display.print(hour);
-
-  display.setCursor(1, 13);
-  display.print(minute);
-
-  drawProgressBar(display, elapsedSeconds);
-  endDraw(display, frameCounter);
+static void drawProgressBar(int elapsedSeconds) {
+  int w = ((elapsedSeconds % 60) * SCREEN_W) / 59;
+  if (w > SCREEN_W) w = SCREEN_W;
+  u8g2.drawBox(0, 0, w, PROGRESS_H);
 }
 
-void displayTime(String hour, String minute, int elapsedSeconds, uint8_t orientation) {
+static void drawCentered(int yBaseline, const char* str, const uint8_t* font) {
+  u8g2.setFont(font);
+  int w = u8g2.getStrWidth(str);
+  int x = (SCREEN_W - w) / 2;
+  u8g2.drawStr(x, yBaseline, str);
+}
+
+void displayTime(String hour, String minute, int elapsedSeconds) {
   static String lastHour = "";
   static String lastMinute = "";
   static int lastElapsedSeconds = -1;
-  static uint8_t lastOrientation = 0xFF;
 
-  // Redraw if time OR orientation changed
   if (lastHour == hour && lastMinute == minute &&
-      lastElapsedSeconds == elapsedSeconds &&
-      lastOrientation == orientation) {
+      lastElapsedSeconds == elapsedSeconds) {
     return;
   }
 
-  uint8_t activeDisplays = getActiveDisplays(orientation);
-
-  if (activeDisplays == 1 || activeDisplays == 3) {
-    drawTime(ledmatrix_top, currentFrame_top, hour, minute, elapsedSeconds);
-  }
-  if (activeDisplays == 2 || activeDisplays == 3) {
-    drawTime(ledmatrix_bottom, currentFrame_bottom, hour, minute, elapsedSeconds);
-  }
+  u8g2.clearBuffer();
+  drawProgressBar(elapsedSeconds);
+  drawCentered(60,  hour.c_str(),   FONT_BIG);
+  drawCentered(110, minute.c_str(), FONT_BIG);
+  u8g2.sendBuffer();
 
   lastHour = hour;
   lastMinute = minute;
   lastElapsedSeconds = elapsedSeconds;
-  lastOrientation = orientation;
 }
 
-void drawBatteryLow(Adafruit_IS31FL3731& display, uint8_t& frameCounter) {
-  beginDraw(display, frameCounter);
+void displayElapsedMinutes(int elapsedSeconds) {
+  int elapsedMinutes = elapsedSeconds / 60;
+  int progressW = ((elapsedSeconds % 60) * SCREEN_W) / 59;
 
-  const uint8_t B = 200;  // brightness
-  // 9 pixels wide, centered on 9-wide display starting at x=0
-  // 15 rows tall
+  static int lastElapsedMinutes = -1;
+  static int lastProgressW = -1;
 
-  // Row 0: nub  ..XXXXX..
-  for (int x = 2; x <= 6; x++) display.drawPixel(x, 0, B);
-
-  // Row 1: top wall  XXXXXXXXX
-  for (int x = 0; x <= 8; x++) display.drawPixel(x, 1, B);
-
-  // Rows 2-9: empty interior  X.......X
-  for (int y = 2; y <= 9; y++) {
-    display.drawPixel(0, y, B);
-    display.drawPixel(8, y, B);
+  if (lastElapsedMinutes == elapsedMinutes &&
+      lastProgressW == progressW) {
+    return;
   }
 
-  // Rows 10-13: charge fill
-  for (int y = 10; y <= 13; y++) {
-    display.drawPixel(0, y, B);  // left wall
-    display.drawPixel(8, y, B);  // right wall
-    for (int x = 2; x <= 6; x++) display.drawPixel(x, y, B);
-  }
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%d", elapsedMinutes);
 
-  // Row 14: bottom wall  XXXXXXXXX
-  for (int x = 0; x <= 8; x++) display.drawPixel(x, 14, B);
+  const uint8_t* font = (elapsedMinutes >= 100) ? FONT_MEDIUM : FONT_BIG;
 
-  endDraw(display, frameCounter);
+  u8g2.clearBuffer();
+  drawProgressBar(elapsedSeconds);
+  drawCentered(90, buf, font);
+  u8g2.sendBuffer();
+
+  lastElapsedMinutes = elapsedMinutes;
+  lastProgressW = progressW;
 }
 
-void displayBatteryLow(uint8_t orientation) {
+void displayBatteryLow() {
   static bool lastShown = false;
-  static uint8_t lastOrientation = 0xFF;
+  if (lastShown) return;
 
-  if (lastShown && lastOrientation == orientation) return;
-
-  uint8_t activeDisplays = getActiveDisplays(orientation);
-
-  if (activeDisplays == 1 || activeDisplays == 3) {
-    drawBatteryLow(ledmatrix_top, currentFrame_top);
-  }
-  if (activeDisplays == 2 || activeDisplays == 3) {
-    drawBatteryLow(ledmatrix_bottom, currentFrame_bottom);
-  }
+  u8g2.clearBuffer();
+  // Battery body outline (44 wide x 88 tall, centered horizontally)
+  u8g2.drawFrame(10, 20, 44, 88);
+  // Nub on top
+  u8g2.drawBox(24, 14, 16, 6);
+  // Low-charge fill at bottom (~⅓ height)
+  u8g2.drawBox(14, 74, 36, 30);
+  u8g2.sendBuffer();
 
   lastShown = true;
-  lastOrientation = orientation;
-}
-
-void drawSplash(Adafruit_IS31FL3731& display, uint8_t& frameCounter) {
-  beginDraw(display, frameCounter);
-  display.setFont(&Picopixel);
-  display.setCursor(1, 6);
-  display.print("NY");
-  display.setCursor(1, 13);
-  display.print("ZC");
-  endDraw(display, frameCounter);
 }
 
 void displaySplash() {
-  drawSplash(ledmatrix_top, currentFrame_top);
-  drawSplash(ledmatrix_bottom, currentFrame_bottom);
+  u8g2.clearBuffer();
+  drawCentered(60,  "NY", FONT_BIG);
+  drawCentered(110, "ZC", FONT_BIG);
+  u8g2.sendBuffer();
 }
 
-void drawElapsedMinutes(Adafruit_IS31FL3731& display, uint8_t& frameCounter, int elapsedMinutes, int elapsedSeconds) {
-  beginDraw(display, frameCounter);
-
-  // Use Picopixel for double-digit numbers, default font for single digits
-  if (elapsedMinutes >= 10) {
-    display.setFont(&Picopixel);
-    display.setCursor(1, 10);  // Picopixel uses baseline (text goes up)
-  } else {
-    display.setFont();  // default font uses top-left (text goes down)
-    display.setCursor(2, 5);  // Adjust Y for top-left positioning
-  }
-
-  display.print(elapsedMinutes);
-
-  drawProgressBar(display, elapsedSeconds);
-  endDraw(display, frameCounter);
-}
-
-void displayElapsedMinutes(int elapsedSeconds, uint8_t orientation) {
-  int elapsedMinutes = elapsedSeconds / 60;
-  int progressLevel = (elapsedSeconds % 60) * 8 / 59;
-
-  static int lastElapsedMinutes = -1;
-  static int lastProgressLevel = -1;
-  static uint8_t lastOrientation = 0xFF;
-
-  if (lastElapsedMinutes == elapsedMinutes &&
-      lastProgressLevel == progressLevel &&
-      lastOrientation == orientation) {
-    return;
-  }
-  uint8_t activeDisplays = getActiveDisplays(orientation);
-
-  if (activeDisplays == 1 || activeDisplays == 3) {
-    drawElapsedMinutes(ledmatrix_top, currentFrame_top, elapsedMinutes, elapsedSeconds);
-  }
-  if (activeDisplays == 2 || activeDisplays == 3) {
-    drawElapsedMinutes(ledmatrix_bottom, currentFrame_bottom, elapsedMinutes, elapsedSeconds);
-  }
-
-  lastElapsedMinutes = elapsedMinutes;
-  lastProgressLevel = progressLevel;
-  lastOrientation = orientation;
-}

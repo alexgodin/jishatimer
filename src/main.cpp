@@ -149,6 +149,38 @@ void loop() {
       Serial.printf("BATTERY: %.0f%%\n", pct);
       break;
     }
+    if (cmd == 'X') {
+      // Probe SH1106 OLED on I2C at 0x3C and 0x3D.
+      // Catches "screen shows nothing" caused by wiring/address/power.
+      bool found = false;
+      for (uint8_t addr : {(uint8_t)0x3C, (uint8_t)0x3D}) {
+        Wire.beginTransmission(addr);
+        uint8_t err = Wire.endTransmission();
+        if (err == 0) {
+          Serial.printf("DISPLAY: ok addr=0x%02X\n", addr);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        Serial.println("DISPLAY: not_found addr=0x3C,0x3D");
+      }
+      break;
+    }
+    if (cmd == 'I') {
+      // Full I2C bus scan: prints every address that ACKs.
+      Serial.println("I2C: scanning 0x08..0x77");
+      int count = 0;
+      for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+          Serial.printf("I2C:   0x%02X ACK\n", addr);
+          count++;
+        }
+      }
+      Serial.printf("I2C: %d device(s) found\n", count);
+      break;
+    }
     if (cmd == 'Q') {
       String hour, minute;
       getCurrentTime(hour, minute);
@@ -195,15 +227,15 @@ void loop() {
   }
 
   if (showBattery && elapsed < 15) {
-    displayBatteryLow(currentOrientation);
+    displayBatteryLow();
   } else {
     showBattery = false;
     if (elapsed < 60) {
       String hour, minute;
       getCurrentTime(hour, minute);
-      displayTime(hour, minute, elapsed, currentOrientation);
+      displayTime(hour, minute, elapsed);
     } else {
-      displayElapsedMinutes(elapsed, currentOrientation);
+      displayElapsedMinutes(elapsed);
     }
   }
 
@@ -220,7 +252,6 @@ void loop() {
       if (getBatteryPercent() < 30.0f) {
         showBattery = true;
       }
-      clearInactiveDisplay(curr);  // Clear the inactive display
     }
   }
 
