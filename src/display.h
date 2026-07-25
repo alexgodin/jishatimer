@@ -18,7 +18,10 @@ void clearDisplay();
 // Display blinking low-battery icon
 void displayBatteryLow();
 
-// Display "NY" / "ZC" splash screen
-void displaySplash();
+// Display the logo splash screen with battery percentage. Shown whenever
+// the device is charging (not just at boot). Draws a border when
+// syncedRecently is true (debug signal, not shown to distract users when
+// false). forceRedraw bypasses the dedupe cache (use on state entry).
+void displaySplash(float batteryPercent, bool syncedRecently, bool forceRedraw);
 
 #endif

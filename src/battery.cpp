@@ -1,6 +1,16 @@
 #include <Arduino.h>
 #include "battery.h"
 
+#define CHARGE_STATUS_PIN D7
+
+void setupChargeDetection() {
+  pinMode(CHARGE_STATUS_PIN, INPUT);
+}
+
+bool isCharging() {
+  return digitalRead(CHARGE_STATUS_PIN) == HIGH;
+}
+
 float getBatteryPercent() {
   uint32_t Vbatt = 0;
   for(int i = 0; i < 16; i++) {
@@ -15,4 +25,18 @@ float getBatteryPercent() {
   batteryPercent = constrain(batteryPercent, 0.0f, 100.0f);
 
   return batteryPercent;
+}
+
+float getDisplayBatteryPercent() {
+  static float cached = -1.0f;
+  static unsigned long lastCheck = 0;
+  const unsigned long CHECK_INTERVAL_MS = 2UL * 60 * 1000;  // 2 minutes
+
+  unsigned long now = millis();
+  if (cached < 0.0f || (now - lastCheck) >= CHECK_INTERVAL_MS) {
+    cached = getBatteryPercent();
+    lastCheck = now;
+  }
+
+  return cached;
 }

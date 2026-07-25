@@ -24,6 +24,16 @@ bool syncTimeFromNtp();
 // Sync with retry (default 3 attempts)
 bool syncTimeWithRetry(int maxAttempts = 3);
 
+// Run an NTP sync exactly on a charge-start edge (charging && !wasCharging)
+void checkChargeSync(bool charging);
+
+// Whether the last charge-triggered sync attempt failed
+bool didLastSyncFail();
+
+// Whether the RTC was successfully NTP-synced within the last 24 hours
+// (debug indicator, not tied to the charge-trigger logic)
+bool syncedRecently();
+
 // Debug/test functions
 void debugSetElapsed(int seconds);
 void debugSetLastNtpSync(time_t epoch);

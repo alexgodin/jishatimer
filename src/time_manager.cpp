@@ -1,4 +1,5 @@
 #include "time_manager.h"
+#include "battery.h"
 #include <RTClib.h>
 #include <Wire.h>
 #include <WiFi.h>
@@ -12,7 +13,8 @@ void getCurrentTime(String &hour, String &minute);
 RTC_PCF8523 rtc;
 static bool rtcAvailable = false;
 RTC_DATA_ATTR time_t lastNtpSync = 0;  // Persists across deep sleep
-const time_t SYNC_INTERVAL = 48 * 60 * 60;  // 48 hours
+RTC_DATA_ATTR bool wasCharging = false;     // Persists across deep sleep
+RTC_DATA_ATTR bool lastSyncFailed = false;  // Persists across deep sleep
 
 // Fault injection flags for testing
 bool debugWifiFail = false;
@@ -144,11 +146,26 @@ bool syncTimeWithRetry(int maxAttempts /* = 3 */) {
     return false;
 }
 
-bool isNtpSyncDue() {
-    if (!rtcAvailable) return false;
-    if (lastNtpSync == 0) return true;  // First boot
+void checkChargeSync(bool charging) {
+    if (charging && !wasCharging && rtcAvailable) {
+        Serial.println("Charge started, syncing NTP...");
+        bool ok = syncTimeWithRetry();
+        Serial.printf("NTP sync %s\n", ok ? "succeeded" : "FAILED");
+        lastSyncFailed = !ok;
+    }
+    wasCharging = charging;
+}
+
+bool didLastSyncFail() {
+    return lastSyncFailed;
+}
+
+const time_t SYNC_FRESHNESS_WINDOW = 24 * 60 * 60;  // 24 hours
+
+bool syncedRecently() {
+    if (!rtcAvailable || lastNtpSync == 0) return false;
     time_t now = rtc.now().unixtime();
-    return (now - lastNtpSync) >= SYNC_INTERVAL;
+    return (now - lastNtpSync) < SYNC_FRESHNESS_WINDOW;
 }
 
 void setupTime() {
@@ -172,14 +189,8 @@ void setupTime() {
     setenv("TZ", POSIX_TZ, 1);
     tzset();
 
-    // Sync from NTP if due
-    if (isNtpSyncDue()) {
-        Serial.println("NTP sync due, starting...");
-        bool ok = syncTimeWithRetry();
-        Serial.printf("NTP sync %s\n", ok ? "succeeded" : "FAILED");
-    } else {
-        Serial.println("NTP sync not due, skipping");
-    }
+    // Sync from NTP on a charge-start edge (covers "already plugged in at boot")
+    checkChargeSync(isCharging());
 }
 
 // Returns current time in 12-hour format
@@ -194,7 +205,12 @@ void getCurrentTime(String &hour, String &minute) {
     localtime_r(&utc, &local);
 
     int h = local.tm_hour % 12;
-    hour = String(h == 0 ? 12 : h);
+    h = (h == 0) ? 12 : h;
+    if (h < 10) {
+        hour = "0" + String(h);
+    } else {
+        hour = String(h);
+    }
 
     int m = local.tm_min;
     if (m < 10) {
@@ -218,6 +234,7 @@ int getElapsedSeconds() {
 void debugCorruptTime() {
     rtc.adjust(DateTime(2000, 1, 1, 0, 0, 0));
     lastNtpSync = 0;
+    wasCharging = false;
     Serial.println("RTC set to 2000-01-01 00:00, rebooting to sync...");
     Serial.flush();
     ESP.restart();

@@ -75,9 +75,18 @@ void setup() {
   Wire.begin();
   delay(100);
 
-  // Initialize display first and show splash while WiFi connects
+  // Charge detection must be configured before setupTime() (which reads
+  // isCharging() to decide whether to sync)
+  setupChargeDetection();
+
   connect_display();
-  displaySplash();
+
+  // Splash only shows while charging (D7 high). If already charging at
+  // boot, draw it now so it's visible during setupTime()'s blocking sync
+  // below; loop() takes over redrawing it every tick after that.
+  if (isCharging()) {
+    displaySplash(getDisplayBatteryPercent(), syncedRecently(), false);
+  }
 
   // Initialize RTC and time management (may block for WiFi/NTP)
   setupTime();
@@ -92,7 +101,8 @@ void setup() {
 // DISPLAY STATE HELPERS
 // ============================================================================
 
-const char* getDisplayStateName(int elapsed) {
+const char* getDisplayStateName(int elapsed, bool charging) {
+  if (charging) return "CHARGING";
   if (showBattery && elapsed < 15) return "BATTERY";
   if (elapsed < 60) return "TIME";
   if (elapsed < SLEEP_TIMEOUT_MINUTES * 60) return "ELAPSED_MINUTES";
@@ -120,13 +130,13 @@ void loop() {
     }
     if (cmd == 'E') {
       int e = getElapsedSeconds();
-      Serial.printf("STATE: %s elapsed=%ds\n", getDisplayStateName(e), e);
+      Serial.printf("STATE: %s elapsed=%ds\n", getDisplayStateName(e, isCharging()), e);
       break;
     }
     if (cmd == 'R') {
       resetElapsedTimer();
       int e = getElapsedSeconds();
-      Serial.printf("RESET: timer reset, state=%s elapsed=%ds\n", getDisplayStateName(e), e);
+      Serial.printf("RESET: timer reset, state=%s elapsed=%ds\n", getDisplayStateName(e, isCharging()), e);
       break;
     }
     if (cmd == 'F') {
@@ -141,12 +151,17 @@ void loop() {
       int secs = numStr.toInt();
       debugSetElapsed(secs);
       int e = getElapsedSeconds();
-      Serial.printf("FASTFWD: elapsed=%ds state=%s\n", e, getDisplayStateName(e));
+      Serial.printf("FASTFWD: elapsed=%ds state=%s\n", e, getDisplayStateName(e, isCharging()));
       break;
     }
     if (cmd == 'B') {
       float pct = getBatteryPercent();
       Serial.printf("BATTERY: %.0f%%\n", pct);
+      break;
+    }
+    if (cmd == 'C') {
+      Serial.printf("CHARGING: %s SYNC: %s\n", isCharging() ? "yes" : "no",
+                     didLastSyncFail() ? "failed" : "ok");
       break;
     }
     if (cmd == 'X') {
@@ -215,9 +230,11 @@ void loop() {
 
   // Track and display elapsed time
   int elapsed = getElapsedSeconds();
+  bool charging = isCharging();
 
   // Log state transitions
-  const char* currentStateName = getDisplayStateName(elapsed);
+  const char* currentStateName = getDisplayStateName(elapsed, charging);
+  bool enteringCharging = (prevStateName != currentStateName && currentStateName == "CHARGING");
   if (prevStateName == nullptr) {
     prevStateName = currentStateName;
     Serial.printf("TRANSITION: BOOT -> %s at elapsed=%ds\n", currentStateName, elapsed);
@@ -226,7 +243,9 @@ void loop() {
     prevStateName = currentStateName;
   }
 
-  if (showBattery && elapsed < 15) {
+  if (charging) {
+    displaySplash(getDisplayBatteryPercent(), syncedRecently(), enteringCharging);
+  } else if (showBattery && elapsed < 15) {
     displayBatteryLow();
   } else {
     showBattery = false;
@@ -238,6 +257,12 @@ void loop() {
       displayElapsedMinutes(elapsed);
     }
   }
+
+  // Charge-triggered NTP sync can block for tens of seconds (WiFi connect
+  // + NTP wait, up to 3 retries) — run it after the display update above,
+  // not before, so a charge-start edge shows the splash immediately
+  // instead of leaving the previous screen up for the whole sync.
+  checkChargeSync(charging);
 
   // Process orientation changes
   if (orientationChanged) {

@@ -209,6 +209,16 @@ def test_query_battery(dev):
     return False, f"No BATTERY: line: {lines}"
 
 
+def test_query_charging(dev):
+    """Test: C returns charge status and last charge-triggered sync outcome."""
+    lines = send_with_retry(dev, "C", marker="CHARGING:")
+    for line in lines:
+        m = re.search(r'CHARGING: (yes|no) SYNC: (ok|failed)', line)
+        if m:
+            return True, f"charging={m.group(1)} sync={m.group(2)}"
+    return False, f"No well-formed CHARGING: line: {lines}"
+
+
 def test_elapsed_minutes_transition(dev):
     """Test 5: Fast-forward to 65s, state should be ELAPSED_MINUTES."""
     lines = send_with_retry(dev, "F65\n", marker="FASTFWD:")
@@ -325,7 +335,14 @@ def test_calibration_end_to_end(dev):
 
 
 def test_ntp_first_sync_reboot(dev):
-    """Test 14: T command — corrupt RTC, reboot, full NTP sync."""
+    """Test 14: T command — corrupt RTC, reboot, full NTP sync.
+
+    Sync is now charge-triggered (edge on the D7 charge-status pin), not a
+    48h-timer fallback, so this only fires if the DUT is actively charging
+    (not just USB-connected) at reboot time — some charge ICs de-assert
+    their status line once the battery reaches full even with USB still
+    connected. If this test stops seeing a sync, check whether the test
+    battery was topped off before assuming a firmware regression."""
     comp_h_before, comp_m_before = get_computer_time_12h()
     dev.send("T")
     lines, found = dev.read_until("Activity timer started", timeout=30)
@@ -396,6 +413,7 @@ def main():
         ("Time Display State", test_time_display_state),
         ("Query Time Format", test_query_time_format),
         ("Query Battery", test_query_battery),
+        ("Query Charging", test_query_charging),
         ("Elapsed Minutes Transition", test_elapsed_minutes_transition),
         ("Timer Reset", test_timer_reset),
         ("Sleep Timeout (dry run)", test_dry_sleep),
