@@ -29,9 +29,12 @@ uint8_t lis3dh_readRegister(uint8_t reg) {
   if (!lis3dhAddr) return 0xFF;
   Wire.beginTransmission(lis3dhAddr);
   Wire.write(reg);
-  Wire.endTransmission(false);
+  // Check the repeated-start result. Ignoring it lets a NACKed address fall
+  // through to requestFrom(), which can still hand back bus data — that false
+  // positive is what made the address probe below pick a part that isn't there.
+  if (Wire.endTransmission(false) != 0) return 0xFF;
 
-  Wire.requestFrom(lis3dhAddr, (uint8_t)1);
+  if (Wire.requestFrom(lis3dhAddr, (uint8_t)1) != 1) return 0xFF;
   if (Wire.available()) {
     return Wire.read();
   }
@@ -46,6 +49,12 @@ bool lis3dh_init() {
   uint8_t whoami = 0xFF;
   for (uint8_t addr : {(uint8_t)LIS3DH_I2C_ADDR_SDO_LOW,
                        (uint8_t)LIS3DH_I2C_ADDR_SDO_HIGH}) {
+    // Require a plain address ACK before believing anything read back, the
+    // same test the I command's bus scan uses. WHO_AM_I alone is not enough:
+    // a NACKed address can still yield 0x33 from bus state and send the whole
+    // driver to an address where every config write then fails with err=2.
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() != 0) continue;
     lis3dhAddr = addr;
     whoami = lis3dh_readRegister(LIS3DH_REG_WHO_AM_I);
     if (whoami == 0x33) break;
@@ -82,8 +91,15 @@ bool lis3dh_init() {
   // Interrupt duration: immediate
   lis3dh_writeRegister(LIS3DH_REG_INT1_DUR, 0x00);
 
-  // Enable 6D orientation detection on all axes
-  lis3dh_writeRegister(LIS3DH_REG_INT1_CFG, 0xFF);
+  // Enable 6D orientation detection on all axes. This is the one write that
+  // must land — without it no interrupt ever fires and the only symptom is a
+  // timer that stops resetting on a flip, so treat a NACK here as init failure
+  // rather than logging it and carrying on.
+  if (!lis3dh_writeRegister(LIS3DH_REG_INT1_CFG, 0xFF)) {
+    Serial.printf("ERROR: LIS3DH at 0x%02X would not accept INT1_CFG\n", lis3dhAddr);
+    lis3dhAddr = 0;
+    return false;
+  }
 
   // Clear any pending interrupts
   lis3dh_readRegister(LIS3DH_REG_INT1_SRC);
