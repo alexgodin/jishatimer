@@ -182,6 +182,26 @@ void loop() {
       }
       break;
     }
+    if (cmd == 'V') {
+      // RTC health. Distinguishes "crystal drifting" from "part lost its
+      // count", which the calibration path must never confuse.
+      bool osStopped, configured;
+      getRtcBootState(osStopped, configured);
+      Serial.printf("RTCHEALTH: present=%s valid=%s boot_oscillator_stopped=%d "
+                    "boot_configured=%d offset=%d\n",
+                    rtcIsPresent() ? "yes" : "no",
+                    timeIsValid() ? "yes" : "no", osStopped, configured,
+                    readCalibrationOffset());
+      break;
+    }
+    if (cmd == 'Z') {
+      // Discard a stored correction. Needed after a bad calibration is
+      // written, since nothing recomputes the offset until a sync lands with
+      // a long enough window.
+      clearCalibration();
+      Serial.printf("CALCLEAR: offset=%d\n", readCalibrationOffset());
+      break;
+    }
     if (cmd == 'I') {
       // Full I2C bus scan: prints every address that ACKs.
       Serial.println("I2C: scanning 0x08..0x77");
@@ -220,9 +240,20 @@ void loop() {
       break;
     }
     if (cmd == 'L') {
-      // Backdate lastNtpSync so calibration path runs (elapsed > 3600s)
-      debugSetLastNtpSync(time(nullptr) - 7200);
+      // Backdate lastNtpSync past MIN_ELAPSED_SECONDS so the calibration path
+      // runs. Seven days, not the old two hours: at 2h the RTC's 1s counting
+      // resolution alone reads as 139 ppm, so the gate now rejects it.
+      //
+      // Dry run, because the window is fabricated: the RTC's real error
+      // accumulated over however long since its last actual sync, so dividing
+      // it by 7 days yields a number that must not reach the offset register.
+      // Without this the suite miscalibrated the part it was testing.
+      debugCalibrationDryRun = true;
+      debugBackdateLastNtpSync(7L * 24 * 3600);
       bool ok = syncTimeWithRetry();
+      debugCalibrationDryRun = false;
+      // On success the sync already overwrote lastNtpSync with the real time.
+      if (!ok) debugRestoreLastNtpSync();
       Serial.printf("NTP sync %s\n", ok ? "succeeded" : "FAILED");
       break;
     }
