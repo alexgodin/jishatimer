@@ -88,11 +88,15 @@ void setup() {
     displaySplash(getDisplayBatteryPercent(), syncedRecently(), false);
   }
 
+  // Before setupTime(), which blocks for up to ~47s on a charge-start or
+  // recovery NTP sync. Flips arriving during that window were dropped on the
+  // floor with the interrupt attached afterwards; nothing here needs the
+  // clock, so there is no reason to wait.
+  currentOrientation = lis3dh_setupInterrupt(LIS3DH_INT_PIN, orientationISR);
+
   // Initialize RTC and time management (may block for WiFi/NTP)
   setupTime();
 
-  // Initialize accelerometer and configure interrupt
-  currentOrientation = lis3dh_setupInterrupt(LIS3DH_INT_PIN, orientationISR);
   resetElapsedTimer();
   Serial.println("Activity timer started\n");
 }
@@ -179,6 +183,19 @@ void loop() {
       }
       if (!found) {
         Serial.println("DISPLAY: not_found addr=0x3C,0x3D");
+      }
+      break;
+    }
+    if (cmd == 'A') {
+      // Probe the LIS3DH. Its init failure is non-fatal — the firmware warns
+      // once on the boot log and carries on — so without a queryable status
+      // a device whose orientation input is dead passes every other test
+      // here while silently never resetting the timer on a flip.
+      if (lis3dh_isPresent()) {
+        Serial.printf("ACCEL: ok addr=0x%02X\n", lis3dh_address());
+      } else {
+        Serial.printf("ACCEL: not_found addr=0x%02X,0x%02X\n",
+                      LIS3DH_I2C_ADDR_SDO_LOW, LIS3DH_I2C_ADDR_SDO_HIGH);
       }
       break;
     }

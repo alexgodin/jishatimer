@@ -4,8 +4,16 @@
 // Track last detected orientation for debouncing
 static uint8_t lastOrientation = 0;
 
+// Resolved by lis3dh_init(); 0 until the part is found.
+static uint8_t lis3dhAddr = 0;
+static bool lis3dhPresent = false;
+
+bool lis3dh_isPresent() { return lis3dhPresent; }
+uint8_t lis3dh_address() { return lis3dhAddr; }
+
 bool lis3dh_writeRegister(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(LIS3DH_I2C_ADDR);
+  if (!lis3dhAddr) return false;
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(reg);
   Wire.write(value);
   uint8_t error = Wire.endTransmission();
@@ -18,11 +26,12 @@ bool lis3dh_writeRegister(uint8_t reg, uint8_t value) {
 }
 
 uint8_t lis3dh_readRegister(uint8_t reg) {
-  Wire.beginTransmission(LIS3DH_I2C_ADDR);
+  if (!lis3dhAddr) return 0xFF;
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(reg);
   Wire.endTransmission(false);
 
-  Wire.requestFrom((uint8_t)LIS3DH_I2C_ADDR, (uint8_t)1);
+  Wire.requestFrom(lis3dhAddr, (uint8_t)1);
   if (Wire.available()) {
     return Wire.read();
   }
@@ -30,10 +39,21 @@ uint8_t lis3dh_readRegister(uint8_t reg) {
 }
 
 bool lis3dh_init() {
-  // Verify device ID
-  uint8_t whoami = lis3dh_readRegister(LIS3DH_REG_WHO_AM_I);
-  if (whoami != 0x33) {
-    Serial.printf("ERROR: Device ID 0x%02X != 0x33\n", whoami);
+  // Find the part before configuring it. The SDO strap picks between 0x18 and
+  // 0x19, so assuming one silently disables orientation on a board wired the
+  // other way: every read returns 0xFF and the WHO_AM_I check below fails.
+  lis3dhPresent = false;
+  uint8_t whoami = 0xFF;
+  for (uint8_t addr : {(uint8_t)LIS3DH_I2C_ADDR_SDO_LOW,
+                       (uint8_t)LIS3DH_I2C_ADDR_SDO_HIGH}) {
+    lis3dhAddr = addr;
+    whoami = lis3dh_readRegister(LIS3DH_REG_WHO_AM_I);
+    if (whoami == 0x33) break;
+    lis3dhAddr = 0;
+  }
+  if (!lis3dhAddr) {
+    Serial.printf("ERROR: LIS3DH not found at 0x%02X or 0x%02X (last ID 0x%02X)\n",
+                  LIS3DH_I2C_ADDR_SDO_LOW, LIS3DH_I2C_ADDR_SDO_HIGH, whoami);
     return false;
   }
 
@@ -68,7 +88,8 @@ bool lis3dh_init() {
   // Clear any pending interrupts
   lis3dh_readRegister(LIS3DH_REG_INT1_SRC);
 
-  Serial.println("LIS3DH initialized");
+  lis3dhPresent = true;
+  Serial.printf("LIS3DH initialized at 0x%02X\n", lis3dhAddr);
   return true;
 }
 

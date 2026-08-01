@@ -254,6 +254,23 @@ def test_display_present(dev):
     return False, f"No DISPLAY: line: {lines}"
 
 
+def test_accelerometer_present(dev):
+    """Probe the LIS3DH — the device's only real input.
+
+    Its init failure is non-fatal: the firmware prints one warning to the boot
+    log and runs normally, so a board whose accelerometer is dead, unwired, or
+    strapped to the address the driver isn't using passes every other test in
+    this suite. The only symptom is that flipping the device stops resetting
+    the timer, which nothing here would otherwise notice."""
+    lines = send_with_retry(dev, "A", marker="ACCEL:")
+    for line in lines:
+        if line.startswith("ACCEL: ok"):
+            return True, line
+        if line.startswith("ACCEL:"):
+            return False, f"{line} — orientation detection is dead, timer only resets via R"
+    return False, f"No ACCEL: line: {lines}"
+
+
 def test_query_battery(dev):
     """Test 4: B returns valid battery percentage."""
     lines = send_with_retry(dev, "B", marker="BATTERY:")
@@ -519,6 +536,9 @@ def main():
         ("Display Present (I2C probe)",
          skipped("no OLED on this bench (--no-display)") if no_display
          else test_display_present),
+        # No --no-display equivalent: the accelerometer is soldered to the
+        # board, so its absence is always a real fault, never a bench setup.
+        ("Accelerometer Present (I2C probe)", test_accelerometer_present),
         ("RTC Health", test_rtc_health),
         ("Query State Command", test_query_state),
         ("Time Display State", test_time_display_state),

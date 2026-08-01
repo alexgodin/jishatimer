@@ -3,8 +3,12 @@
 
 #include <Arduino.h>
 
-// LIS3DH I2C address (SDO pin grounded = 0x18, SDO high = 0x19)
-#define LIS3DH_I2C_ADDR       0x18
+// LIS3DH I2C address: the SDO pin selects it, and which way that pin is
+// strapped varies by board. Probe both rather than hardcode — with the wrong
+// one every register read returns 0xFF, init fails, and because that failure
+// is non-fatal the device boots fine and silently never detects a flip.
+#define LIS3DH_I2C_ADDR_SDO_LOW   0x18
+#define LIS3DH_I2C_ADDR_SDO_HIGH  0x19
 
 // LIS3DH Register Map
 #define LIS3DH_REG_WHO_AM_I   0x0F
@@ -21,6 +25,13 @@
 
 // Initialize the LIS3DH for 6D orientation detection
 bool lis3dh_init();
+
+// Whether lis3dh_init() found and configured the part. False means orientation
+// changes are never detected — the timer only ever resets via the R command.
+bool lis3dh_isPresent();
+
+// Address lis3dh_init() found the part at; 0 when not present.
+uint8_t lis3dh_address();
 
 // Read a single register
 uint8_t lis3dh_readRegister(uint8_t reg);
