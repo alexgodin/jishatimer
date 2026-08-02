@@ -7,8 +7,12 @@ display presence, timer state transitions, battery, sleep, RTC
 drift/calibration, NTP error paths, and NTP sync.
 Requires device connected via USB serial.
 
-Usage: python3 hardware_test_suite.py [port]
-  port defaults to /dev/cu.usbmodem*
+The RTC calibration arithmetic is covered separately and without hardware by
+`pio test -e native`; the calibration test here only checks the integration.
+
+Usage: python3 hardware_test_suite.py [port] [--no-display]
+  port           defaults to /dev/cu.usbmodem*
+  --no-display   skip the OLED probe when no panel is attached
 """
 
 import sys
@@ -133,6 +137,13 @@ def time_diff_minutes(dev_h, dev_m, comp_h, comp_m):
 # TEST FUNCTIONS
 # =============================================================================
 
+def skipped(reason):
+    """Build a test that reports SKIP — passed is None, not False."""
+    def _test(dev):
+        return None, reason
+    return _test
+
+
 def send_with_retry(dev, cmd, marker=None, timeout=5, retries=3):
     """Send command with retries on empty response."""
     for attempt in range(retries):
@@ -169,11 +180,58 @@ def test_time_display_state(dev):
     return False, f"No STATE: line: {lines}"
 
 
+def test_rtc_health(dev):
+    """RTC holds a believable time — oscillator running and part configured.
+
+    Runs before the time tests because every one of them is meaningless if
+    the RTC lost its count; this makes that the reported failure rather than
+    a confusing parse error further down."""
+    lines = send_with_retry(dev, "V", marker="RTCHEALTH:")
+    for line in lines:
+        m = re.search(r'RTCHEALTH: present=(\w+) valid=(\w+) boot_oscillator_stopped=(\d) '
+                      r'boot_configured=(\d) offset=(-?\d+)', line)
+        if m:
+            present, valid = m.group(1) == "yes", m.group(2) == "yes"
+            os_stopped, configured = m.group(3) == "1", m.group(4) == "1"
+            offset = int(m.group(5))
+            # Check presence first: with no part on the bus every field below
+            # reads zero, which is indistinguishable from a configured RTC
+            # reporting good news, and the old code called that a dead cell.
+            if not present:
+                return False, ("RTC not found on the I2C bus — check wiring, "
+                               "not the backup cell. Confirm with the I command.")
+            if valid:
+                # Bound the stored offset by what the firmware itself is
+                # willing to apply. Tighter than this fails devices whose
+                # genuinely poor crystal legitimately needs a large correction,
+                # and tells the operator to erase a correct calibration.
+                if abs(offset) > 49:  # MAX_PLAUSIBLE_PPM / PPM_PER_LSB
+                    return False, (f"RTC valid but offset={offset} "
+                                   f"({offset * 4.069:.0f} ppm) looks like a bad "
+                                   f"calibration — clear it with the Z command")
+                # Flag a part that recovered this boot but came up cold: it
+                # will lose time again on the next power cycle.
+                if not configured:
+                    return True, ("RTC time valid, but came up unconfigured — "
+                                  "backup power is not holding across power cycles")
+                return True, "RTC time valid"
+            if not configured:
+                return False, ("RTC came up unconfigured — backup cell dead or "
+                               "VBAT not connected. Time shows --:-- until a sync.")
+            if os_stopped:
+                return False, ("RTC configured but oscillator stopped — crystal "
+                               "or backup supply fault. Time shows --:-- until a sync.")
+            return False, "RTC reports invalid time for an unexpected reason"
+    return False, f"No RTCHEALTH: line: {lines}"
+
+
 def test_query_time_format(dev):
     """Test 3: Q returns time in valid 12h format (h:mm, h in 1-12).
     Accuracy is tested later after NTP sync."""
     lines = send_with_retry(dev, "Q", marker="TIME:")
     for line in lines:
+        if "TIME: --:--" in line:
+            return False, "Device reports --:-- (no valid RTC time) — see RTC Health"
         m = re.search(r'TIME: (\d+):(\d+)', line)
         if m:
             dev_h, dev_m = int(m.group(1)), int(m.group(2))
@@ -194,6 +252,23 @@ def test_display_present(dev):
         if line.startswith("DISPLAY:"):
             return False, line
     return False, f"No DISPLAY: line: {lines}"
+
+
+def test_accelerometer_present(dev):
+    """Probe the LIS3DH — the device's only real input.
+
+    Its init failure is non-fatal: the firmware prints one warning to the boot
+    log and runs normally, so a board whose accelerometer is dead, unwired, or
+    strapped to the address the driver isn't using passes every other test in
+    this suite. The only symptom is that flipping the device stops resetting
+    the timer, which nothing here would otherwise notice."""
+    lines = send_with_retry(dev, "A", marker="ACCEL:")
+    for line in lines:
+        if line.startswith("ACCEL: ok"):
+            return True, line
+        if line.startswith("ACCEL:"):
+            return False, f"{line} — orientation detection is dead, timer only resets via R"
+    return False, f"No ACCEL: line: {lines}"
 
 
 def test_query_battery(dev):
@@ -320,17 +395,63 @@ def test_ntp_timeout(dev):
 
 
 def test_calibration_end_to_end(dev):
-    """L command — backdate lastNtpSync by 2hrs, sync, verify calibration runs."""
+    """L command — backdate lastNtpSync by 7 days, sync, verify the calibration
+    path is reached and its numbers are self-consistent.
+
+    This is an *integration* check: that the gate fires, the drift/elapsed
+    values come off the RTC sanely, and the math runs. The arithmetic itself
+    is covered exhaustively and without hardware by `pio test -e native`
+    (test/test_calibration) — don't duplicate it here, since real drift on the
+    bench isn't a controllable input.
+
+    L runs the firmware's dry-run path: the 7d window is fabricated, so the
+    ppm it produces is not a crystal measurement and must not be written to
+    the offset register. Seeing DRYRUN is part of what this test asserts.
+    """
     lines = dev.send_and_read("L", timeout=40)
     all_text = "\n".join(lines)
-    if "calibration drift" in all_text:
-        m = re.search(r'calibration drift=(\-?\d+)s over (\d+)s \(([\-\d.]+) ppm\), offset=(\-?\d+)', all_text)
-        if m:
-            drift, elapsed, ppm, offset = int(m.group(1)), int(m.group(2)), float(m.group(3)), int(m.group(4))
-            return True, f"drift={drift}s over {elapsed}s ({ppm:.1f} ppm) offset={offset}"
-        return False, f"Calibration line unparseable: {all_text}"
+
     if "FAILED" in all_text:
         return False, f"Sync failed (even after firmware retries): {all_text}"
+
+    if re.search(r'calibration drift=', all_text):
+        return False, ("L wrote a REAL calibration — dry-run flag is broken, the "
+                       "offset register now holds a fabricated correction. "
+                       "Clear it with the Z command.")
+
+    m = re.search(r'calibration DRYRUN drift=(-?\d+)s over (\d+)s \((-?[\d.]+) ppm\), offset=(-?\d+)', all_text)
+    if m:
+        drift, elapsed, ppm, offset = int(m.group(1)), int(m.group(2)), float(m.group(3)), int(m.group(4))
+        # elapsed = 604800 - drift + syncDuration, so a fast RTC lands BELOW
+        # the nominal 604800. The firmware accepts |drift| up to 121s (200 ppm),
+        # so the window has to be at least that wide on both sides or a
+        # perfectly healthy fast RTC fails here.
+        if not (604600 <= elapsed <= 604980):
+            return False, f"elapsed={elapsed}s, expected ~604800s from the L backdate"
+        if elapsed and abs(drift / elapsed * 1e6 - ppm) > 1.0:
+            return False, f"ppm={ppm} inconsistent with drift={drift}s over {elapsed}s"
+        # Deliberately NOT recomputing the offset here: that is
+        # test/test_calibration's job, and doing it in Python compares
+        # banker's rounding against the firmware's lroundf() using a ppm
+        # already truncated to one decimal by printf. Just bound it.
+        if abs(offset) > 49:  # MAX_PLAUSIBLE_PPM / PPM_PER_LSB
+            return False, f"offset={offset} outside the plausible register range"
+        return True, f"dry-run calibration: drift={drift}s over {elapsed}s ({ppm:.1f} ppm) offset={offset}"
+
+    m = re.search(r'calibration skipped drift=(-?\d+)s over (\d+)s \((-?[\d.]+) ppm\) - (.+)', all_text)
+    if m:
+        drift, elapsed, ppm, reason = int(m.group(1)), int(m.group(2)), float(m.group(3)), m.group(4)
+        # Reaching the skip branch still proves the gate fired and the math ran.
+        # An implausible ppm here means the RTC is not merely drifting — most
+        # likely it was reseeded from firmware compile time (see setupTime).
+        if abs(ppm) > 200.0:
+            return False, (f"RTC drift {ppm:.0f} ppm is not crystal error — "
+                           f"RTC likely lost power and reseeded to compile time. "
+                           f"drift={drift}s over {elapsed}s")
+        return False, f"Calibration skipped unexpectedly: {reason} ({ppm:.1f} ppm)"
+
+    if "first sync, skipping calibration" in all_text:
+        return False, f"lastNtpSync was not backdated — L hook is broken: {all_text}"
     return False, f"No calibration output: {all_text}"
 
 
@@ -400,7 +521,9 @@ def test_ntp_resync_calibration(dev):
 # =============================================================================
 
 def main():
-    port = sys.argv[1] if len(sys.argv) > 1 else None
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    no_display = "--no-display" in sys.argv
+    port = args[0] if args else None
     dev = SerialDevice(port)
 
     # Ensure timer is reset at start
@@ -408,7 +531,15 @@ def main():
 
     tests = [
         # Group 1: State & Display Tests
-        ("Display Present (I2C probe)", test_display_present),
+        # --no-display: the probe is correct, the bench just has no OLED
+        # attached. Report SKIP rather than a FAIL that has to be remembered.
+        ("Display Present (I2C probe)",
+         skipped("no OLED on this bench (--no-display)") if no_display
+         else test_display_present),
+        # No --no-display equivalent: the accelerometer is soldered to the
+        # board, so its absence is always a real fault, never a bench setup.
+        ("Accelerometer Present (I2C probe)", test_accelerometer_present),
+        ("RTC Health", test_rtc_health),
         ("Query State Command", test_query_state),
         ("Time Display State", test_time_display_state),
         ("Query Time Format", test_query_time_format),
@@ -436,7 +567,7 @@ def main():
             passed, msg = func(dev)
         except Exception as e:
             passed, msg = False, f"Exception: {e}"
-        status = "PASS" if passed else "FAIL"
+        status = "SKIP" if passed is None else ("PASS" if passed else "FAIL")
         print(f"  [{status}] {msg}")
         results.append((name, passed, msg))
 
@@ -444,15 +575,20 @@ def main():
     print(f"\n{'='*60}")
     print("SUMMARY")
     print(f"{'='*60}")
-    passed_count = sum(1 for _, p, _ in results if p)
-    total = len(results)
+    passed_count = sum(1 for _, p, _ in results if p is True)
+    failed_count = sum(1 for _, p, _ in results if p is False)
+    skipped_count = sum(1 for _, p, _ in results if p is None)
+    ran = passed_count + failed_count
     for name, passed, msg in results:
-        status = "PASS" if passed else "FAIL"
+        status = "SKIP" if passed is None else ("PASS" if passed else "FAIL")
         print(f"  [{status}] {name}: {msg}")
-    print(f"\n{passed_count}/{total} tests passed")
+    summary = f"\n{passed_count}/{ran} tests passed"
+    if skipped_count:
+        summary += f", {skipped_count} skipped"
+    print(summary)
 
     dev.close()
-    sys.exit(0 if passed_count == total else 1)
+    sys.exit(0 if failed_count == 0 else 1)
 
 
 if __name__ == "__main__":
